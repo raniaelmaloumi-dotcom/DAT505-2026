@@ -1,0 +1,319 @@
+---
+title: "Homework for Week 5: First draft"
+format: 
+  html:
+    self_contained: true
+    toc: true
+    embed-resources: true
+execute:
+  echo: true
+  warning: false
+  message: false 
+  error: false
+editor: visual
+---
+
+## Introduction
+
+This paper performs a statistical analysis on openly available, open-source data collected through the Which Personality Quiz, an online personality-matching survey that associates participants with fictional characters from selected universes such as TV shows, movies, or popular franchises.
+
+#### The survey:
+
+The survey unfolds in two main stages. First, participants describe their personality using bipolar adjective scales ranging from 1 to 100 (for example, positioning themselves between “introverted” and “extraverted”). Based on these responses, an algorithm matches participants with a character from a selected fictional universe and assigns a percentage indicating the degree of similarity.
+
+Participants may then evaluate the outcome of the matching by rating how similar they feel to the assigned character on a scale from 1 (“extremely similar”) to 6 (“extremely different”). This subjective evaluation constitutes the main outcome variable in this study.
+
+The analysis focuses on a subset of variables capturing the context of participation (year, region and country, occupation), personality-related information (Jung personality type and quiz item responses), participants’ evaluations of the character matching (*survey ratings*), and several time-lapse measures (in milliseconds) recording the time spent at different stages of the survey.
+
+## Research Question: 
+
+This study examines whether the popularity of a fictional universe influences how positively participants evaluate their character match.
+
+Highly popular fictional universes are culturally salient, frequently referenced, and widely discussed, which increases familiarity and the likelihood of positive associations. Repeated exposure to well-known universes may also foster nostalgia, stronger memory, and a greater ability for participants to project themselves into familiar characters. As a result, being matched with a character from a popular universe may be perceived more favorably, independently of the objective personality match.
+
+In contrast, less popular or niche universes, despite being prone to nostalgia and emotional attachement too, are generally less culturally present and may therefore generate weaker emotional or identificatory responses on average.
+
+**Hypothesis:**\
+Participants matched with characters from more popular fictional universes will rate the character matching as more similar (give higher similarity scores) than participants matched with characters from less popular universes. While exceptions may exist, the overall difference in ratings between popular and less popular universes is expected to be statistically significant.
+
+## Descriptive statistics: 
+
+The descriptive analysis centers on the "survey_ratings" variable, which captures participants’ evaluations of their character matches. This variable requires substantial preprocessing, as it is stored as a complex nested JSON structure showing ratings across different selected universes and matched characters.
+
+Once transformed into a tidy format, this variable allows for the identification of fictional universes, the measurement of their popularity based on frequency of selection, and the comparison of evaluation scores between more and less popular universes. These descriptive statistics provide the empirical basis for assessing whether perceived similarity systematically varies with universe popularity.
+
+```{r}
+#| include: false
+library(tidyverse)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(gt)
+library(jsonlite)
+library(purrr)
+library(kableExtra)
+library(knitr)
+data <- read_delim("SWCPQ-Identification-Survey-Dataset-July2022.csv")
+
+```
+
+The dataset contains 297,877 observations and 19 variables. Several variables are stored as numeric (`<dbl>`) despite representing categorical information (age group, gender, screen type). These variables will be recoded as factors. Other variables contain JSON-encoded structures (e.g. survey ratings, quiz items) and require further parsing and tidying before analysis.
+
+```{r}
+#Constructing a table (called variable_table) to calculate missing values and number of unique values 
+variable_table <- data %>%
+  summarise(across(
+    everything(),
+    list(
+      type = ~ class(.x)[1],
+      n_missing = ~ sum(is.na(.x)),
+      n_unique = ~ n_distinct(.x)
+    ),
+    .names = "{.col}__{.fn}"
+  )) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = c("variable", ".value"),
+    names_sep = "__"
+  ) %>%
+  arrange(variable)
+
+variable_table %>%
+  kable(
+    col.names = c("Variable", "Type", "Missing values", "Unique values"),
+    caption = "Overview of variables in the dataset"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "condensed"),
+    full_width = FALSE
+  )
+
+```
+
+Variables with substantial missing values (occupation, Jung type, country and region) will be excluded from the main analysis to avoid faulty or unreliable conclusions.
+
+```{r}
+#Let's create a new dataset (called data_clean), showing only relavant information for analysis. 
+
+#1. First removing non-reliable variables: 
+data_clean <- data %>%
+
+  select(
+    -occupation,
+    -jung_type,
+    -country,
+    -universes_unselected,
+    -introelapse,
+    -endelapse,
+    -region
+  ) %>%
+  
+# 2. Recoding coded numerics as factors 
+  mutate(
+    age_group = factor(age_group),
+    gender    = factor(gender),
+    engNat    = factor(engNat),
+    screen    = factor(screen),
+    
+#3 Encoding quantitative variables are numeric
+    year          = as.numeric(year),
+    testelapse    = as.numeric(testelapse),
+    surveyelapse  = as.numeric(surveyelapse),
+    form          = as.numeric(form),
+    enneagram_type= as.numeric(enneagram_type)
+  )
+
+```
+
+Our new dataset contains 12 variables instead of 19.
+
+#### Tidying data:
+
+Here we will focus on nested variables like survey_ratings and quiz_items in order to simplify analysis.
+
+The variable survey_ratings has 3 pieces of information in one cell:
+
+1.  character ID: the character participants were matched with after responding
+
+2.  user rating: Participants' rating of character matching which goes from 1= Extremely similar to 6= Extremely different. This can be perceived as participants' satisfaction with survey results.
+
+3.  response time: in milliseconds, how long did users take to rate the survey.
+
+    ```{r}
+    #Creating a rating block in the data_clean set. 
+    #First we need to add user id s in order to locate which participants gave which rating: 
+    data_clean <- data_clean %>%
+      mutate(user_id = row_number()) %>%
+      relocate(user_id)
+
+    #There are too many observations, which slows down the tidying process: we selected a sample of 10 000 from the original dataset, data_clean
+    data_sample <- data_clean %>% slice(1:10000)
+    view(data_sample)
+
+    #Lets now seperate the three obkects nested withing json_parsed (survey_rating list) into three usable variables
+
+    data_sample_tidy <- data_sample %>%
+      mutate(parsed = map(survey_ratings, fromJSON)) %>%
+      mutate(parsed = map(parsed, as.data.frame)) %>%
+      unnest(parsed) %>%
+      rename(
+        chr_id = V1,
+        user_rating = V2,
+        response_time = V3
+      ) %>%
+      mutate(
+        user_rating = as.numeric(user_rating),
+        response_time = as.numeric(response_time)
+      ) %>%
+      select(-survey_ratings)
+
+    #Now the section survey_ratings is transformed into three distinct variables each analysable independently. 
+    summary(data_sample_tidy$user_rating)
+    ```
+
+Having organised the major part of the data set of interest, we can now proceed with the visualization of distribution of key variables.
+
+#### Which universes are most vs least picked by participants? 
+
+```{r}
+
+#Universe_selected has multiple universes per row, lets split them:
+universe_long <- data_sample_tidy %>%
+  select(user_id, universes_selected) %>%
+  separate_rows(universes_selected, sep = ",")
+
+#Now counting how many participants per universe
+universe_counts <- universe_long %>%
+  distinct(user_id, universes_selected) %>%
+  count(universes_selected, name = "n_participants") %>%
+  arrange(desc(n_participants))
+```
+
+```{r}
+#Lets visualize ten most picked fictional universes: 
+top10 <- universe_counts %>% slice_max(n_participants, n = 10)
+
+ggplot(top10,
+       aes(x = reorder(universes_selected, n_participants),
+           y = n_participants)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Top 10 most selected fictional universes",
+    x = "Fictional universe",
+    y = "Number of participants"
+  ) +
+  theme_minimal()
+
+```
+
+The plot shows that the fictional universes most picked by participants are (in this order): Harry potter, Marvel Cinematic Universe, Toy Story, The Lion King, Avatar: The Last Airbender, The Hunger Games, Friends, Brooklyn Nine-Nine, The Office and The Simpsons. As mentioned earlier, the shows most picked by participants are likely very popular. And indeed, all of these shows are extremely known, very much part of mainstream culture. Lets looks at least picked fictional universes:
+
+```{r}
+bottom10 <- universe_counts %>%
+  slice_min(n_participants, n = 10, with_ties = FALSE)
+
+ggplot(bottom10,
+       aes(x = reorder(universes_selected, n_participants),
+           y = n_participants)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Bottom 10 least selected fictional universes",
+    x = "Fictional universe",
+    y = "Number of participants"
+  ) +
+  theme_minimal()
+```
+
+Bad Boys, The Big Sick, Roman Holiday, ER, Blue Bloods, Nomadland, Mulholland Drive, The Americans, The Fall and The Spectacular Now are the least selected shows by participants. These shows are far less known then those mentioned in the previous plot.
+
+Now that we know more about the most and least selected fictional universes, lets explore the potential relationship between ratings and shows.
+
+#### Which universes get the best vs worse ratings? 
+
+```{r}
+#| include: false
+#First we need to split the variable chr_id which combines both character and universe: 
+ratings_by_universe <- data_sample_tidy %>%
+  select(user_id, chr_id, user_rating) %>%
+  separate(chr_id, into = c("universe", "character_id"), sep = "/", remove = FALSE) %>%
+  mutate(
+    user_rating = as.integer(user_rating)
+  )
+
+view(ratings_by_universe) #now we have a clear dataframe that shows ratings for each character within each universe 
+
+universe_ratings_summary <- ratings_by_universe %>%
+  group_by(universe) %>%
+  summarise(
+    n_ratings = n(),
+    mean_rating = mean(user_rating, na.rm = TRUE),
+    median_rating = median(user_rating, na.rm = TRUE)
+  ) %>%
+  arrange(mean_rating)
+
+universe_ratings_summary 
+#remebering that the lower the rating, the higher the perceived similarity 
+```
+
+```{r}
+ratings_plot_data <- ratings_by_universe %>%
+  mutate(
+    popularity_group = case_when(
+      universe %in% top10$universes_selected    ~ "Top 10 most selected",
+      universe %in% bottom10$universes_selected ~ "Bottom 10 least selected",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(popularity_group))
+
+ggplot(ratings_plot_data,
+       aes(x = universe, y = user_rating)) +
+  geom_boxplot() +
+  coord_flip() +
+  facet_wrap(~ popularity_group, scales = "free_y") +
+  labs(
+    title = "Distribution of character ratings by universe popularity",
+    x = "Fictional universe",
+    y = "User rating (1 = extremely similar, 6 = extremely different)"
+  ) +
+  theme_minimal()
+```
+
+The distributions of character ratings for the most and least selected universes largely overlap. However, the least selected universes exhibit a wider spread of ratings, making it difficult to identify a clear difference in central tendency between the two groups. This indicates that universe popularity is more clearly associated with variability in evaluations than with consistently higher or lower perceived similarity.
+
+```{r}
+ratings_by_group <- ratings_plot_data %>%
+  group_by(popularity_group) %>%
+  summarise(
+    n_ratings = n(),
+    mean_rating = mean(user_rating, na.rm = TRUE),
+    median_rating = median(user_rating, na.rm = TRUE),
+    sd_rating = sd(user_rating, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+#lets compute the median and means of these two groups to quantify this difference. 
+ratings_by_group %>%
+  mutate(
+    mean_rating = round(mean_rating, 2),
+    median_rating = round(median_rating, 2),
+    sd_rating = round(sd_rating, 2)
+  ) %>%
+  kable(
+    col.names = c(
+      "Popularity group",
+      "Number of ratings",
+      "Mean rating",
+      "Median rating",
+      "SD"
+    ),
+    caption = "Descriptive statistics of character ratings by universe popularity"
+  )
+
+```
+
+The table summarizes the number and distribution of character similarity ratings by universe popularity. Mean and median ratings are nearly identical across groups, indicating comparable average evaluations, while variability is slightly higher for the most selected universes.
+
+Contrary to our expectations, the results do not support the initial idea that popular universes would systematically receive better ratings. In practice, average ratings are very similar across popularity groups, and differences remain small. This suggests that familiarity with a universe does not necessarily translate into stronger identification with a matched character. In some cases, less popular universes may even elicit more positive reactions, possibly because participants who select them already feel a stronger connection to that universe.
