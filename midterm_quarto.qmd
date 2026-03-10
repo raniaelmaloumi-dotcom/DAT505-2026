@@ -1,0 +1,407 @@
+---
+title: "midterm training: Student Exam Performance Dataset"
+format: 
+  html:
+    self_contained: true
+    toc: true
+    embed-resources: true
+execute:
+  echo: false
+  warning: false
+  message: false 
+  error: false
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(car)
+library(dplyr)
+library(kableExtra)
+library(knitr)
+library(modelsummary)
+s <- read.csv("StudentPerformanceFactors.csv")
+```
+
+## Introduction
+
+This data set contains information about a sample of 6607 students' performance in exams, in addition to other environmental and behavioral variables which may or may not impact students' scores.
+
+The data set has 20 variables, the main outcome variable is scores, which takes values between 0 and 100.
+
+Other school related variables like previous scores, attendance, teaching quality, access to resources, hours studied combined with other more circumstantial variables like parental school level, learning disabilities and distance from home (how far a student is from their school) allow us to formulate a clear and concise hypothesis about factors influencing or associated with higher exam scores.
+
+### Descriptive statistics:
+
+Before formulating our hypotheses, lets look at our outcome variable's distribution:
+
+#### Score distribution
+
+```{r}
+#histogram with count for student per grade interval
+ggplot(s, aes(x = Exam_Score)) + #scores on the x axis, n of students on y axis
+  geom_histogram(binwidth = 3, fill = "skyblue", color = "white") +#bins in blue
+  scale_x_continuous(breaks = seq(min(s$Exam_Score), max(s$Exam_Score), by = 5)) +#this limits the x axis scale to max and min values of scores
+  labs(title = "Distribution of Exam Scores",
+       x = "Score (0-100)",
+       y = "Number of Students") +
+  theme_minimal()
+```
+
+The histogram shows that exam scores follow a normal distribution with a slight right skew. Most students score between 65 and 70, while very few have low scores (55 to 65) and even fewer have higher scores (from 70 upwards, with a negligible number of students getting a perfect score).
+
+Let's now look at the values of central tendency to have a more precise idea of students' scores.
+
+```{r}
+#creating a dataframe with all the needed values
+scores_desc <- data.frame(
+  "Statistic" = c("Mean", "Median", "Mode", "Std Dev", "Min", "Max", "Range"),
+  "Value" = c(
+    round(mean(s$Exam_Score), 2),
+    round(median(s$Exam_Score), 2),
+    round(as.numeric(names(sort(table(s$Exam_Score), decreasing=TRUE)[1])), 2),
+    round(sd(s$Exam_Score), 2),
+    round(min(s$Exam_Score), 2),
+    round(max(s$Exam_Score), 2),
+    round(max(s$Exam_Score) - min(s$Exam_Score), 2)
+  )
+   )
+
+#plotting this info into a nice table:
+scores_desc %>%
+  kbl(col.names = c("Statistic", "Value"), align = c("l", "r"), 
+      caption = "Central Tendency — Exam Scores") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE, position = "center") %>%
+  row_spec(0, bold = TRUE, background = "#4A90D9", color = "white") %>%
+  column_spec(1, bold = TRUE)
+  
+```
+
+The average score is 67.24, and half of the students score under/ over 68. The minimum score scored is 55, while the highest is 101. This maximum is impossible as the highest a student can score is 100. Lets check the unique values of this variable.
+
+```{r}
+unique(s$Exam_Score)
+```
+
+101 is the only unique value that represents an issue for our analysis. As our histogram showed, very few students scored over 95. There should be no issue removing those who scored 101, without impacting our analysis.
+
+```{r}
+s <- s %>% 
+  filter(Exam_Score <= 100) #keeps only values under 100
+nrow(s) #number of rows in s
+```
+
+Only one student had a grade higher than the possible maximum. Our row number is now 6606.
+
+Now that we know more about our outcome variable, lets focus on potential predictors.
+
+Many variables in the data set could be of interest here. However, for the sake of our analysis, beyond behavioral aspects of studying (like hours of study, hours of sleep, attendance or previous scores) we would like to grasp the effect environmental factors have on students' scores.
+
+#### Parental Education Level or Parental involvement ?
+
+Parental Education Level could highly impact students' scores. Children who spend their formative years around college educated adults benefit not only from better material and life conditions, but likely continue in their parents' steps towards higher education, which requires higher scores. Additionally, higher education also means that parents have a better ability to assist their children in their schoolwork, potentially boosting their scores higher.
+
+However, Education level doesn't necessarily mean better assistance. So Parental involvement could be a better indicator of parents' impact on student scores. Let's look at the difference in mean scores across conditions in both variables.
+
+```{r}
+s <- s %>%
+  rename(PEL = Parental_Education_Level) #for simplicity, we renamed the var. PEL
+#dataframe with count of students by PEL condition and their prop
+PEL_tab <- s %>% 
+  group_by(PEL) %>%
+  summarize(n = n()) %>%
+  mutate(proportion = round(n / sum(n), 3))
+#plotting into a nice table
+kable(PEL_tab, col.names = c("Parental Education Level", "Count", "Proportion"),
+      caption = "Distribution by Parental Education Level")
+```
+
+1.4 % of the data has missing values for Parental education level. Almost half of students in our sample have parents who stopped at High School, 30% in College and 19.8% are Postgraduates.
+
+Let's look at students mean scores per education level.
+
+```{r}
+#table with mean scores by PEL condition
+scores_by_level<- s %>%
+  group_by(PEL) %>%
+  summarize(mean_score = mean(Exam_Score, na.rm=TRUE))
+kable(scores_by_level, col.names = c("Parental Level", "mean scores"), 
+      caption = "Mean scores by parental education level")
+```
+
+There is a slight difference between the groups' mean scores, although very subtle. As expected, the higher the parental education level, the higher the score. The lowest mean score out of the three known levels is the one associated with the lowest level of education (High School = 66.9), followed by College (67,3) and Postgraduate level (68).
+
+Let's see if parental involvement differentiates students better:
+
+```{r}
+#for simplicity we rename the variable PI
+s <- s %>%
+  rename(PI = Parental_Involvement)
+#dataframe summarises the count, prop and mean scores by condition
+PI_tab <- s %>%
+  group_by(PI) %>%
+  summarize(
+    meanscore = round(mean(Exam_Score), 2),
+    n = n()
+    ) %>%
+  mutate(proportion = round(n / sum(n), 3))
+#plotting into nice table
+kable(PI_tab, col.names = c("PI", "Mean Score", "Count", "Proportion"),
+      caption = "Distribution by Parental Involvement")
+```
+
+The difference in means are more noticeable here, closer to a full point of difference between each group. The two variables seem to proportionally evolve, with higher involvement being associated with higher scores. Assuming these observations are self-report by students, 50% deem their parents to be involved in their studies at a medium level. While both high and low involvement represent respectively 30 and 20%.
+
+It seems that parental involvement provide better grounds for further analysis. In the following section (inferential statistics), we'll look at whether this difference in means is statistically significant.
+
+#### Access to Resources :
+
+Access to resources like textbooks, tutoring, technology, or a quiet study environment, provides students with the tools necessary to prepare more effectively for exams. Greater resource availability reduces barriers to learning and allows students to engage more deeply with course material, which would naturally translate into better academic performance.
+
+Access_to_Resources is a categorical variable with three levels: High, Medium and low. Let's see if the mean scores differ by access level:
+
+```{r}
+#renaming as Access for speed
+s <- s %>%
+  rename(Access = Access_to_Resources)
+#Box plot to look at the distribution by condition
+boxplot(Exam_Score ~ Access,
+        data = s,
+        main = "Box Plot of Exam scores by access",#title
+        xlab = "access",
+        ylab = "Exam scores",
+        col = rainbow(3))
+```
+
+Note that the boxplot shows some extreme values but they fall within the valid range of the scale (0 to 100 on exam scores ). So it should be fine inf we retain them for analysis. Their is a slight difference between the means, with, as predicted, highest mean in high access, lowest mean for low and between them medium access to resources.
+
+#### Hypotheses:
+
+We first hypothesize that high exam scores are associated with higher parental involvement. Our outcome is a continuous variable that follows a normal distribution, and our predictor variable is an ordinal variable with three categories: High involvement, medium and low.
+
+Higher the involvement could lead to higher exam scores.
+
+Second, students with higher access to resources have potentially better chances to score higher, given the descriptive statistics, we believe higher access to resources could be associated with higher exam scores.
+
+### Inferential statistics:
+
+#### **Parental involvement:**
+
+We established through descriptive statistics that there indeed a 1 point difference in scores between parental involvement groups. Let's verify whether this difference is statistically significant.
+
+Given that parental involvement is an ordinal variable with three categories, and our outcome is a continuous variable that goes from 0 to 100, we will perform a ANOVA type 1 test.
+
+```{r}
+#making an anova model called m1
+m1 <- aov(Exam_Score ~ PI, data = s)
+summary(m1)
+```
+
+A one way anova test shows us whether there is a significant difference in scores between the three groups of involvement. Statistically, Anova allows to know wether between-group variance (the element of interest here) is higher than within-group variance.
+
+The results give us a very large F-ration F(2, 2555) = 87.61, and a p-value p \< 0.001, which means that there is indeed a difference between groups that is statistically significant, meaning not due by chance. Let's look at the confidence intervals:
+
+```{r}
+confint(m1)
+```
+
+Confidence intervals indicate that if the study were to be repeated, 95% of the time the estimates will land in the intervals given here. These intervals are quite small, and none of them contain 0. This strengthens the model's robustness.
+
+**Assumptions:**
+
+Let's see if the assumptions for an anova test are met:
+
+1.  Normality of residuals:
+
+    ```{r}
+    qqnorm(m1$residuals)
+    qqline(m1$residuals) 
+    ```
+
+    The normality assumption was assessed via a QQ plot. Although there is some deviation in the tails, given the large sample size (6606), the ANOVA is considered robust to this violation.
+
+2.  Homoscedasticity:
+
+    ```{r}
+    leveneTest(Exam_Score ~ PI, data = s)
+    ```
+
+A Levene's Test shows the variance of residuals between an within groups, and whether the difference between the two is significant. The assumption here is that all residuals have equal variance between and within groups, an assumption met by our model. The F value is small and the p-value is superior to 0.5, meaning the difference between the variances is not significant. Homoscedasticity is met.
+
+#### Access to resources
+
+The variable access to resources is a categorical one that takes three cactegories: High, medium and low. We saw that score mean vary slightly across groups. Let's check if there is any statistical significance to this difference. We use the same Anova test to assess variance between and within groups:
+
+```{r}
+m2 <- aov(Exam_Score ~ Access, data = s)
+summary(m2)
+```
+
+The one way anova results are: F( 2, 2889) = 99.4 ; p \< 0.001. Again, these results are significant, with a high F-ratio, meaning a strong difference between groups compared to within groups, and a p-value indicating high statistical difference. Let's check if the model's assumptions are met:
+
+**Assumptions:**
+
+1.  Normality of residuals:
+
+    ```{r}
+    qqnorm(m2$residuals)
+    qqline(m2$residuals) 
+    ```
+
+    This QQplot is similar to the one we analysed for the involvement variable. Again, although the normality assumption is not met, we can still retain this model because of the data set's large sample.
+
+2.  Homoscedasticity:
+
+    ```{r}
+    leveneTest(Exam_Score ~ Access, data = s)
+    ```
+
+The F-ratio seems pretty low, but the p-value is too low (0.05 \< 0.5) which indicates that the variance between and within groups is not equal, and that this difference is statistically significant. This means that the homoscedasticity is not satisfied.
+
+A better model, one that doesn't require equal variance, is the Welch's ANOVA:
+
+```{r}
+oneway.test(Exam_Score ~ Access, data = s, var.equal = FALSE)#the var.equal = FALSE is what cancels the need for equal variance
+```
+
+The Welch's anova returns significant results. F(2, 3345) = 102.38 is a very strong value, accompanied with a p-value \< 0.1. These results indicate high statistical significance.
+
+### Regressions :
+
+Now that we have proof that both parental involvement and access to resources have a significant effect on students' exam scores, let's see their size and direction.
+
+#### Predictive power of Parental Involvement:
+
+```{r}
+#| include: false
+#clarifying first the order of the levels to indicate the reference category (Medium)
+s$PI <- factor(s$PI, levels = c("Medium", "Low", "High"))
+
+# regression
+reg1 <- lm(Exam_Score ~ PI, data = s)
+modelsummary(list("PI only" = reg1))
+```
+
+```{r}
+
+modelsummary(reg1,
+  stars = TRUE,
+  gof_map = c("nobs", "r.squared", "adj.r.squared", "F"),
+  output = "kableExtra",
+  escape = FALSE,
+  title = "Regression Model: PI predicting Exam Scores"
+) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE) %>%
+  row_spec(0, bold = TRUE, background = "#2C3E50", color = "white")
+```
+
+A linear regression was conducted to examine whether parental involvement predicts exam scores, with Medium as the reference category.
+
+The model is significant (F(2, 6603) = 87.61, p \< .001), though it only explains about 2.6% of the variance in scores (R² = .026), which is quite low. The intercept (67.10) represents the mean score for the Medium involvement group. Students with low parental involvement scored on average 0.77 points lower than Medium (β = -0.77, p \< .001), and students with high parental involvement scored 0.99 points higher than Medium (β = 0.99, p \< .001). So while the differences are statistically significant, they are pretty small in practice, suggesting that parental involvement alone doesn't explain much of what drives exam performance.
+
+The statistical significance could alternatively be due to a large sample size.
+
+#### Predictive power of Resource access :
+
+```{r}
+#| include: false
+#reference category as Medium
+s$Access <- factor(s$Access,
+                   levels = c("Medium", "Low", "High"))
+#regression model
+reg2 <- lm(Exam_Score ~ Access , data = s)
+modelsummary(list("ACCESS only" = reg2))
+```
+
+```{r}
+modelsummary(reg2,
+  stars = TRUE,
+  gof_map = c("nobs", "r.squared", "adj.r.squared", "F"),
+  output = "kableExtra",
+  escape = FALSE
+) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE) %>%
+  row_spec(0, bold = TRUE, background = "#2C3E50", color = "white")
+```
+
+We conduct the same linear regression to see how well resource access predicts exam scores. The model was significant (F(2, 6603) = 99.4, p \< .001) and explained about 2.9% of the variance (R² = 0.03).
+
+The intercept (67.12) represents the mean score for students with Medium access to resources. Students with Low access scored 0.92 points lower than Medium (β = -0.92, p \< .001), and students with High access scored 0.97 points higher than Medium (β = 0.97, p \< .001). Both differences are significant and the direction makes sense = more access to resources is linked to higher scores. The effects are however quite small, and the low R² suggests that access to resources alone doesn't substantially explain students' high scores.
+
+#### What about interaction?
+
+```{r}
+#| include: false
+int_model <- lm(Exam_Score ~ PI * Access, data = s)
+modelsummary(list("Interaction between PI & Access" = int_model))
+```
+
+```{r}
+modelsummary(int_model,
+  stars = TRUE,
+  gof_map = c("nobs", "r.squared", "adj.r.squared", "F"),
+  output = "kableExtra",
+  escape = FALSE
+) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE) %>%
+  row_spec(0, bold = TRUE, background = "#2C3E50", color = "white")
+```
+
+A multiple linear regression with an interaction term was run to see whether the effect of parental involvement on exam scores depends on access to resources (and vice versa), with Medium as the reference for both. The overall model was significant (F(8, 6597) = 49.7, p \< .001) and explained about 5.7% of the variance (R² = .057) — basically the same as the model without the interaction, which is already a hint.
+
+The main effects held up: Low PI scored 0.73 points lower than Medium PI (p \< .001), High PI scored 0.97 points higher (p \< .001), Low access scored 0.91 points lower than Medium access (p \< .001), and High access scored 0.93 points higher (p \< .001).
+
+However, none of the interaction terms were significant, all four had p-values well above .05 (ranging from .39 to .69). This means the effect of PI on scores doesn't really change depending on access to resources, and vice versa. They each contribute independently to exam performance but don't amplify or buffer each other.
+
+So the simpler model without the interaction is actually the better choice here. Adding the interaction didn't explain any additional variance and just made the model more complicated for no gain.
+
+#### Visualization:
+
+```{r}
+
+ggplot(s, aes(x = Access, y = Exam_Score, color = PI, group = PI)) +
+  stat_summary(fun = mean, geom = "point", size = 3) +
+  stat_summary(fun = mean, geom = "line") +
+  labs(title = "Mean Exam Scores by PI and Access to Resources",
+       x = "Access to Resources",
+       y = "Mean Exam Score",
+       color = "Parental Involvement") +
+  theme_minimal()
+```
+
+The High PI group (blue) consistently scores the highest across all access levels, and Low PI (green) the lowest, which lines up with the regression results. The lines are roughly parallel, confirming there's no real interaction between the two variables.
+
+Also, Low access to resources is clearly the worst condition for everyone, all three lines dip at Low and recover at High, which makes intuitive sense. Having high access to resources seems to give everyone a boost regardless of parental involvement level.
+
+```{r}
+#lets fit all the models into a regression table:
+#let's rename the models first
+models <- list(
+  "PI only" = reg1,
+  "Access only" = reg2,
+  "PI × Access" = int_model)
+#plotting the models into the table
+modelsummary(models,
+  stars = TRUE,
+  gof_map = c("nobs", "r.squared", "adj.r.squared", "F"),#we chose these indicators
+  output = "kableExtra",
+  escape = FALSE
+) %>%
+#to make the table nice looking
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE) %>%
+  row_spec(0, bold = TRUE, background = "#2C3E50", color = "white")
+```
+
+## Conclusion
+
+Both hypotheses were supported. Higher parental involvement was associated with higher exam scores, and higher access to resources similarly predicted better performance. Both effects were statistically significant across all models.
+
+When combined, the two predictors explained about 5.7% of the variance in scores (vs 2.6% and 2.9% individually), which confirms that they contribute independently. The interaction model showed no significant interaction, meaning the two variables act additively rather than amplifying each other.
+
+While the results are statistically significant, the low R² suggests that PI and access to resources alone are not sufficient to fully explain scores. There clearly are other stronger factors at play, like past exam scores and hours studied.
