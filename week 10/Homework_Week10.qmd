@@ -1,0 +1,392 @@
+---
+title: "Week 10 Homework"
+format: 
+  html:
+    self_contained: true
+    toc: true
+    embed-resources: true
+execute:
+  echo: true
+  warning: false
+  message: false 
+  error: false
+editor: visual
+---
+
+```{r}
+#| include: false
+library(tidyverse)
+library(performance)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(gt)
+library(jsonlite)
+library(purrr)
+library(kableExtra)
+library(knitr)
+library(car)
+library(broom)
+library(modelsummary)
+library(readr)
+diabetes_subsample <- read_csv("C:/Users/rania/OneDrive/Documents/DAT505/DAT505-2026/week 10/diabetes_subsample.csv")
+```
+
+# Section 1: Linear and Logistic Models
+
+### Question 1:
+
+The check_model() function is a comprehensive test of multiple assumptions a model has. Within the performance package, there are multiple functions that test different things, like check_collinearity(), check_normality() or check_heteroscedasticity(). The check_model() function is more practical as it assembles all the needed information to asses the goodness of fit of our model in one go. It gives a thorough and complete check of colinearity, normality, heteroscedasticity and the presence of influential observations.
+
+### Question 2:
+
+```{r fig.width=14, fig.height=10}
+#1. running a linear model predicting glucose level with bmi
+library(modelsummary)
+m1 <- lm(
+  blood_glucose_level ~ bmi,
+  data = diabetes_subsample)
+
+#2. generating a diagnostic report: 
+library(performance)
+check_model(m1)
+```
+
+**Posterior Predictive Check**: The plot visualizes how well the distribution od data predicted by the model matches the observed distribution of blood glucose levels. The green line represents the observed data and the blue lines are the model's predictions. Ideally they should overlap, but here the observed data shows a much more variable, bimodal-looking distribution that the model doesn't fully capture. While the model is somewhat representative, it's still not capturing an important chunk of the variation in the data.
+
+**Linearity:** The Linearity plot checks whether the relationship between BMI and blood glucose is actually linear. The residuals should scatter randomly around zero. As the caption says, the reference line should be flat and horizontal. It mostly is, but it starts creeping upward around the 147 mark, suggesting the linearity assumption starts to break down at higher fitted values. Worth noting though that the fitted values only range from about 133 to 150, so there isn't a huge range to judge from.
+
+**Homogeneity of Variance** (homoscedasticity) checks whether the spread of residuals stays constant across fitted values. The standardized residuals should stay roughly flat. The line is mostly flat but slopes upward at the higher end, and there seems to be one outlier pulling it up. So the assumption is largely met but not perfectly.
+
+**Influential Observations** identifies data points that combine both a high leverage and large residuals, meaning that they can pull the regression line toward them. All points are within the contour lines which is good, but observation 802 are getting close to the boundary with the highest leverage value, and this is likely the same point causing the linearity and homoscedasticity to wobble at the end.
+
+**Normality of Residuals** checks whether the residuals follow a normal distribution. They should fall flat on the reference line. Here they don't really, showing more of a staircase pattern which suggests blood glucose is behaving more like a discrete variable than a fully continuous variable. The tails also deviate from the line which is different from a typical normal distribution.
+
+In sum, i think the model is sort of a safe option, with caveats. The normal distribution assumption is violated. The calculation of the p-values, standard errors and confidence intervals rely on this assumption, so we need to be careful interpreting these results. However, our sample is quite large, so the calculations approximate normality. The real issue is that the staircase shape residuals take indicates that the variable isn't continuous, which doesn't match with linear regression assumptions. Additionally, the model is incomplete. Much of the important variation isn't captured as shown in the Posterior Predictive Check. This makes sense because with only one predictor (bmi), you can't explain much.
+
+A better option would be to add more predictors to have a full picture of what's driving blood glucose levels. Alternatively, a switch to a model that doesn't predict a continuous variable would be a better fit here.
+
+## Section 2: Logistic Regression
+
+### Question 3
+
+The results of a logistic regression are quite unintuitive to read as the coefficients represent log odds. Exponentiating them gives us odds ratios, which are much more interpretable: an odds ratio larger than one indicates that the odds of the event increase, smaller than one means they decrease, and an odds ratio equal to one indicates no effect. We performed a logistic regression predicting diabetes from BMI, controlling for age and gender. For the sake of readability, we exponentiate the results so that the effect sizes directly reflect how the odds of having diabetes change with each predictor.
+
+Before running the regression, we need to center the age and bmi variables so that our intercept is interpretable. By centering the two, the intercept will indicate the odds ratios of having diabetes at an average age and BMI, rather than a null bmi and age which are not informative.
+
+```{r}
+#calculating the mean bmi and age before centering: 
+mean(diabetes_subsample$bmi) 
+mean(diabetes_subsample$age)
+
+#Centering these two variable: 
+diabetes_subsample <- diabetes_subsample %>%
+  mutate(
+    bmi_c = bmi - mean(bmi, na.rm = TRUE),
+    age_c = age - mean(age, na.rm = TRUE)
+  )
+#Now we can run the regression
+```
+
+The mean bmi in this sample is \~27.3. The mean age is 42. Let's run the logistic regression now:
+
+```{r}
+m2 <- glm(
+  diabetes ~ bmi_c + age_c + gender,
+  data = diabetes_subsample,
+  family = binomial
+)
+
+modelsummary(m2,
+             exponentiate = TRUE,
+             statistic = "p.value")
+```
+
+The regression table shows how the odds and odds ratios of having diabetes as bmi, age and gender change.
+
+The intercept indicates that a female (reference category) of average BMI (27.3) and average age (42) has an odds of 0.04 of having diabetes. This translates to roughly a 4% probability of having diabetes, which is pretty low. The intercept has a p-value of 0.001 which is well below the 0.05 threshold, meaning that it is statistically significant.
+
+The bmi coefficient shows that for every one unit increase in BMI above 27.3, the odds of having diabetes are multiplied by 1.085. Controlling for age and gender, an additional unit of bmi over the intercept gives us an odds ratio of 0.043. The p value is equal to the previous one (0.001) so the coefficient is significant.
+
+The Age coefficient shows that each additional year of age above 42, keeping bmi at 27.3 and gender female, multiplies the odds of having diabetes 1.053. For instance, if age were to increase by one year from the intercept (43), the odds ratio will become 0.042. The 0.001 p value indicates a high statistical significance.
+
+Being male compared to female multiplies the odds by1.64 controlling for BMI and age. Meaning that males are 64% more likely to have diabetes than female, holding bmi and age constant. The p-value, although higher than other coefficients (0.036) is still quite significant.
+
+The last coefficient associated with the gender category "other" is not interpretable, its p-value is 0.9. This might be because this category represents a very small protion of our sample. This makes its estimate unreliable.
+
+### Question 4:
+
+```{r fig.width=14, fig.height=10}
+library(performance)
+check_model(m2)
+```
+
+Posterior Predictive Check: The model predicted counts for both diabetic and non-diabetic cases closely match the observed data, suggesting that the choice of a logistic model was appropriate and that the overall distributional assumptions are met. This is already a noticeable improvement over the linear model used previously.
+
+Binned Residuals: This is the most concerning plot of the four. A substantial number of points fall outside the error bounds, particularly at lower estimated probabilities. The linearity assumption is violated in this range. The model appears to be systematically missing the mark for people with a low predicted probability of diabetes.
+
+Collinearity: All predictors show very low VIF values, comfortably sitting in the green zone and well below the threshold of concern. This confirms that age, BMI and gender are each contributing unique information to the model and that multicollinearity is not an issue here.
+
+Influential Observations: All observations fall within the contour lines, meaning no single individual is exerting a disproportionate influence on the model's coefficients. The results can therefore be considered representative of the dataset as a whole.
+
+Distribution of Quantile Residuals: The dots follow the diagonal line very closely, indicating that the residuals are well behaved and providing additional confidence in the overall fit of the model.
+
+### Question 5:
+
+1.  Linear probability model results:
+
+    ```{r}
+    m3 <- lm(
+      diabetes ~ bmi_c + age_c + gender,
+      data = diabetes_subsample
+    )
+
+    modelsummary(m3, statistic = "p.value")
+    ```
+
+    Intercept (0.074): A female of average BMI and average age has a 7.4% probability of having diabetes.
+
+    BMI (0.005): Each additional unit of BMI above 27.3 is associated with a 0.5 % increase in the probability of diabetes, controlling for age and gender. BMI has a small but statistically significant effect.
+
+    Age (0.003): Each additional year of age above 42 is associated with a 0.3% increase in the probability of diabetes, controlling for BMI and gender. Again small but significant.
+
+    GenderMale (0.038): Being male compared to being female is associated with a 3.8% higher probability of having diabetes, controlling for BMI and age.
+
+    GenderOther (-0.110): As shown in previous regression table, this category is unreliable because of its high p-value (0.69), which is likely due to few observations.
+
+2.  LPM visualization :
+
+    ```{r}
+    ggplot(diabetes_subsample, aes(x = bmi, y = diabetes)) +
+      geom_point(alpha = 0.2) +
+      geom_smooth(method = "lm") +
+      labs(
+         title = "Figure 1: LPM regression predicting diabetes by bmi, age and gender",
+        x = "BMI", y = "Probability of Diabetes")
+    ```
+
+    The regression line dips below zero at lower BMI values, predicting negative probabilities of having diabetes, which is impossible. This is because the linear probability model, unlike logistic regression, doesn't constrain predictions to the valid range of 0 to 1. This is why it's unreliable at the extremes of the predictor distribution. In our case, the dip is likely due to the low bmi values (which arent realistic).
+
+3.  AME results:
+
+    ```{r}
+    library(marginaleffects)
+    avg_slopes(m2)
+    ```
+
+Age (0.0038): On average, each additional year of age is associated with a 0.38% increase in the probability of having diabetes, holding everything else constant.
+
+BMI (0.00592): On average, each additional unit of BMI is associated with a 0.59% increase in the probability of having diabetes, holding everything else constant.
+
+Gender Male - Female (0.03670): On average, males have a 3.67% higher probability of having diabetes compared to females, holding everything else constant.
+
+Gender Other - Female (-0.07479): The genderOther estimate is different from the previous models. It is now -7.5% compared to females, and is actually statistically significant (p \< 0.001).
+
+The AME estimates for BMI (0.59%) and age (0.38%) are very close to the LPM coefficients (0.5% and 0.3%). The logistic model with AMEs and the LPM give us pretty similar answers, but the logistic version is mathematically more rigorous.
+
+### Question 6: 
+
+```{r}
+library(ggplot2)
+
+# 1. The Linear Approach (Straight line)
+p1 <- ggplot(diabetes_subsample, aes(x = bmi, y = diabetes)) +
+  geom_point(alpha = 0.2) +
+  geom_smooth(method = "lm", color = "blue") +
+  labs(title = "Linear Probability Model", subtitle = "A straight line for a binary outcome")
+
+# 2. The Logistic Approach (S-Curve)
+p2 <- ggplot(diabetes_subsample, aes(x = bmi, y = diabetes)) +
+  geom_point(alpha = 0.2) +
+  geom_smooth(method = "glm", method.args = list(family = "binomial"), color = "red") +
+  labs(title = "Logistic Model", subtitle = "The S-curve (sigmoïd)")
+
+p1 | p2 
+```
+
+The two plots show why using a linear model on a binary outcome is not always ideal. On the left, the LPM draws a straight line through the data which works fine in the middle range of BMI, but at lower values the predicted probabilities go below zero.
+
+The logistic model on the right fixes this by fitting an S-shaped curve instead, which is always constrained between 0 and 1. Additionally, it accounts ofr the fact that the effect of BMI on diabetes risk isn't the same across the whole range, it's steeper in the middle and flattens out at the extremes, which is more realistic.
+
+```{r}
+library(marginaleffects)
+# Visualizing the effect of BMI while "controlling" for Age and Gender
+#Linear model:
+model_lin <- lm(diabetes ~ bmi + age + gender, data = diabetes_subsample)
+plot_predictions(model_lin, condition = "bmi") +
+  ylim(0, 1) +
+  labs(
+    title = "Adjusted Predictions of Diabetes",
+    subtitle = "Holding Age and Gender at their mean/mode",
+    y = "Predicted Probability of Diabetes",
+    x = "BMI"
+  )
+
+#Logistic:
+model_log <- glm(diabetes ~ bmi + age + gender, family = binomial, data = diabetes_subsample)
+plot_predictions(model_log, condition = "bmi") +
+  ylim(0, 1) +
+  labs(
+    title = "Adjusted Predictions of Diabetes",
+    subtitle = "Holding Age and Gender at their mean/mode",
+    y = "Predicted Probability of Diabetes",
+    x = "BMI"
+  )
+
+
+```
+
+Both plots show the adjusted probability of diabetes across BMI levels, this time properly holding age and gender constant.
+
+Both plots show that predicted probability of diabetes is very low at lower BMI values, hovering close to zero, and increases as BMI goes up. The uncertainty around those predictions also grows considerably at higher BMI values, (likely due to fewer people with very high BMI in the sample)
+
+In sum, for a female of average age, BMI does have a meaningful positive relationship with diabetes risk, but that risk only really starts climbing noticeably at higher BMI values. At moderate BMI levels the predicted probability remains quite low. BMI alone isn't enough to push someone into high risk of diabetes, other factors are likely playing an important role too.
+
+### Question 7: 
+
+The most efficient way to communicate results to a general audience at a health agency would definitely be the Average Marginal Effects. Odds ratios are just too unintuitive for most people and the LPM could produce impossible predictions at the extremes which would undermine credibility. The AME gives us the best of both worlds: we keep the mathematical rigour of the logistic model, but communicate in plain probability language that most can understand. Telling a policy maker that "on average, each additional BMI unit is associated with a 0.6 percentage point increase in the probability of having diabetes " is immediately actionable and clear. Pairing that with the adjusted predictions plot from the logistic model makes findings more readable too. The AME provides the concrete estimate and the plot shows how that risk evolves across the BMI range, which together makes for a clear and actionable communication of the results without requiring any statistical background from the audience.
+
+## Section 3: Bootstrapping 
+
+### Question 8
+
+The models we ran rely on standard errors and confidence intervals that assume normally distributed residuals, an assumption we already showed is violated in our data. Bootstrap confidence intervals would be more appropriate here because instead of assuming a distribution, they re-sample from the actual data thousands of times and let the distribution emerge naturally, making them more robust to the kind of irregularities we observed.
+
+This would be especially relevant for the genderOther category, where the tiny number of observations completely broke the standard confidence interval, giving us a meaningless estimate with a massive standard error. Bootstrap confidence intervals handle small and irregular samples more gracefully.
+
+And beyond this, confidence intervals in general are better, more informative tools than a simple binary significant/non-significant indicator like the p-value, because they show the range of plausible effects.
+
+### Question 9
+
+```{r}
+hist(diabetes_subsample$blood_glucose_level)
+```
+
+```{r}
+library(tidyverse)
+
+# STEP 1: Create an empty "bucket" (vector) to hold our results
+# We will do this 500 times
+n_iterations <- 500
+glucose_estimates <- numeric(n_iterations)
+
+# STEP 2: The Loop (The "Manual" work)
+for (i in 1:n_iterations) {
+  
+  # A. Create a "Resample" (Pick rows at random with replacement)
+  boot_data <- diabetes_subsample[sample(nrow(diabetes_subsample), replace = TRUE), ]
+  
+  # B. Run the model on THIS specific simulated dataset
+  boot_model <- glm(diabetes ~ blood_glucose_level + age, 
+                    family = "binomial", data = boot_data)
+  
+  # C. Save the Glucose coefficient into our "bucket" at position i
+  glucose_estimates[i] <- coef(boot_model)["blood_glucose_level"]
+  
+  # For pedagogu: Print progress every 100 times so students see it working
+  if(i %% 100 == 0) print(paste("Simulation number", i, "complete!"))
+}
+
+# STEP 3: Turn the bucket into a table for plotting
+results_df <- data.frame(estimate = glucose_estimates)
+
+
+# STEP 4: Visualize the results
+# 1. First, get the "Original Result" from your main model
+model_glucose = glm(diabetes ~ blood_glucose_level + age, 
+                    family = "binomial", data = diabetes_subsample)
+original_slope <- coef(model_glucose)["blood_glucose_level"]
+
+# 2. Plot the histogram
+ggplot(results_df, aes(x = estimate)) +
+  # The bars: represent the 500 "simulated" worlds
+  geom_histogram(fill = "firebrick", color = "white", bins = 30) +
+  # The line: represents the "original" result from our real data
+  geom_vline(xintercept = original_slope, 
+             color = "blue", 
+             linewidth = 1.5, 
+             linetype = "dashed") + 
+  
+  # Add a label to know what the blue line is
+  annotate("text", x = original_slope, y = 10, label = "Original Estimate", 
+           color = "blue", angle = 90, vjust = -0.5, fontface = "bold") +
+  
+  labs(title = "The Bootstrap Distribution",
+       subtitle = "The blue dashed line is our original model result",
+       x = "Effect size of Blood Glucose (Slope)",
+       y = "How many times it happened in 500 tries") +
+  theme_minimal()
+```
+
+Explaining code:
+
+The code starts by creating an empty bucket of 500 slots to store results. Then it runs a loop 500 times, each time it randomly resamples the dataset with replacement (meaning some people might get picked twice and others not at all), runs a logistic regression predicting diabetes from blood glucose and age on that simulated dataset, and saves the blood glucose coefficient into the bucket. Once all 500 simulations are done, it runs the same model one more time on the original data to get the "real" estimate, then plots all 500 simulated coefficients as a histogram with the original estimate marked as a blue dashed line.
+
+Graph description:
+
+The histogram shows the distribution of the 500 blood glucose coefficients collected across all simulated datasets. The distribution is roughly bell-shaped and centered around 0.034, and the original estimate from the real model (blue dashed line) falls right in the middle of it. All 500 simulations produced a positive effect, meaning blood glucose consistently predicts diabetes across every resampled dataset. This gives us confidence that the effect isn't just a quirk of our particular sample.
+
+### Question 10: 
+
+Research question: Do people with hypertension have a higher probability of having diabetes than those without, controlling for age and BMI?
+
+Hypothesis: Hypertension and diabetes tend to go hand in hand clinically, which makes sense given that they share a lot of the same underlying risk factors. Based on this, we think people with hypertension will likely have higher odds of having diabetes, even after controlling for age and BMI.
+
+To test this we use bootstrapping instead of relying on standard confidence intervals, for two reasons:
+
+-   The blood glucose distribution we looked at earlier is clearly skewed and messy, which means the normality assumptions behind traditional confidence intervals are probably not being met.
+
+-   Bootstrapping gets around this by not assuming any distribution at all. It just re-samples the data 500 times and lets the pattern emerge on its own.
+
+```{r}
+
+# STEP 1: Creating the bucket
+n_iterations <- 500
+hypertension_estimates <- numeric(n_iterations)
+
+#Defining original model: 
+model_hypertension <- glm(diabetes ~ hypertension + age_c + bmi_c,
+                          family = "binomial", data = diabetes_subsample)
+original_OR <- exp(coef(model_hypertension)["hypertension"])
+
+# STEP 2: The loop - exponentiate when saving
+for (i in 1:n_iterations) {
+  boot_data <- diabetes_subsample[sample(nrow(diabetes_subsample), replace = TRUE), ]
+  boot_model <- glm(diabetes ~ hypertension + age_c + bmi_c,
+                    family = "binomial", data = boot_data)
+  
+  # Adding exponential to get odds ratio
+  hypertension_estimates[i] <- exp(coef(boot_model)["hypertension"])
+  
+  if(i %% 100 == 0) print(paste("Simulation number", i, "complete!"))
+}
+
+results_df <- data.frame(estimate = hypertension_estimates)
+
+# Exponentiating the CIs
+CI_lower <- quantile(hypertension_estimates, 0.025)
+CI_upper <- quantile(hypertension_estimates, 0.975)
+
+# Plotting (updating the x axis label)
+ggplot(results_df, aes(x = estimate)) +
+  geom_histogram(fill = "firebrick", color = "white", bins = 30) +
+  geom_vline(xintercept = original_OR,
+             color = "blue", linewidth = 1.5, linetype = "dashed") +
+  geom_vline(xintercept = CI_lower, color = "darkgreen",
+             linewidth = 1, linetype = "dotted") +
+  geom_vline(xintercept = CI_upper, color = "darkgreen",
+             linewidth = 1, linetype = "dotted") +
+  annotate("text", x = original_OR, y = 10, label = "Original Estimate",
+           color = "blue", angle = 90, vjust = -0.5, fontface = "bold") +
+  labs(title = "Bootstrap Distribution: Effect of Hypertension on Diabetes",
+       subtitle = "Blue = original estimate, Green = 95% confidence interval",
+       x = "Effect size of Hypertension (Odds Ratio)",
+       y = "How many times it happened in 500 tries") +
+  theme_minimal()
+```
+
+The results support the hypothesis. The original estimate (blue line) sits at an odds ratio of around 4, meaning people with hypertension have roughly 4 times the odds of having diabetes compared to people without, controlling for age and BMI. This effect is somewhat consistent across all 500 simulated datasets, every single bar sits well above an odds ratio of 1, confirming that the effect never disappears regardless of which random sample is drawn.
+
+That said, the distribution is noticeably right-skewed. While most simulations cluster around an odds ratio of 3.5 to 5, some datasets produce much larger effects going up to 9 or more. This tells us that while the direction of the effect is solid, the exact size is harder to determine. The 95% confidence interval (green lines) starts roughly from 2.3 to 8, which is quite wide.
+
+We can say with confidence that hypertension increases the odds of diabetes, but the data doesn't let us be very precise about by exactly how much. This is likely due to the relatively small number of people with hypertension in the data set, which means each re-sample ends up with a slightly different subset of them, producing more variability in the estimate.
